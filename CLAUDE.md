@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A fork of [`isaac-sim/IsaacAutomator`](https://github.com/isaac-sim/IsaacAutomator) ([`ruisenericliu/IsaacAutomator`](https://github.com/ruisenericliu/IsaacAutomator)) that adds **Nebius** as a deploy target alongside the upstream AWS / GCP / Azure / Alicloud providers. The fork is pinned at upstream commit `685bc29` (the NoMachine install fix); Nebius work lives on the `nebius` branch. Everything user-facing still flows through `./run ./deploy-<cloud> <name>` → Terraform → Ansible → Isaac Sim + NoMachine on a GPU VM, driven from a host machine that only runs the `isaac_automator` Docker image.
+A fork of [`isaac-sim/IsaacAutomator`](https://github.com/isaac-sim/IsaacAutomator) ([`ruisenericliu/IsaacAutomator`](https://github.com/ruisenericliu/IsaacAutomator)) that adds **Nebius** as a deploy target alongside the upstream AWS / GCP / Azure / Alicloud providers. The fork tracks upstream at `221b5d2` (v4.0.0 — last merged 2026-05-28); Nebius work lives on the `nebius` branch. Everything user-facing still flows through `./run ./deploy-<cloud> <name>` → Terraform → Ansible → Isaac Sim + NoMachine on a GPU VM, driven from a host machine that only runs the `isaac_automator` Docker image.
 
 ## Current state — read before doing anything
 
-**Fork bring-up complete; Nebius implementation is 🟡 (not started).** Upstream AWS / GCP / Azure / Alicloud paths are untouched and track upstream `685bc29` exactly — no shared source files have been modified. The harness scaffolding (this file, `ARCHITECTURE.md`, `.claude/`, `docs/`) is the only delta on the `nebius` branch so far.
+**Fork bring-up complete; Nebius implementation is 🟡 (not started).** Upstream AWS / GCP / Azure / Alicloud paths are untouched and track upstream `221b5d2` exactly — no shared source files have been modified. The harness scaffolding (this file, `ARCHITECTURE.md`, `.claude/`, `docs/`) is the only delta on the `nebius` branch so far.
 
 The current source of truth for what we're building is **[`docs/exec-plans/active/add-nebius-target.md`](docs/exec-plans/active/add-nebius-target.md)** — read it (especially §Critical files to create or modify) before proposing changes. The Nebius Terraform provider is community-tier (`nebius/nebius` v0.6.8, pre-1.0), and NoMachine install on Nebius's `ubuntu24.04-driverless` image is the highest-risk unverified step.
 
@@ -41,18 +41,18 @@ We are intentionally following the OpenAI Codex "harness engineering" model: hum
 ├── build / run / ssh / start / stop / destroy / repair / import / download / upload / novnc
 ├── deploy-aws / deploy-gcp / deploy-azure / deploy-alicloud   ✅ upstream, untouched
 ├── deploy-nebius                          🟡 to create (mirror of deploy-aws)
-├── image-aws                              ✅ upstream (only AWS has a Packer wrapper today)
+├── image-aws / image-azure / image-gcp    ✅ upstream (Azure + GCP wrappers added in v4.0.0)
 ├── image-nebius                           🟡 to create
 ├── Dockerfile                             ✅ upstream (Nebius CLI install to add)
 └── src/
     ├── ansible/                           ✅ cloud-agnostic except one branch in nvidia-driver
-    ├── packer/{aws,azure}/                ✅ upstream (no gcp/, no alicloud/)
-    ├── packer/nebius/                     🟡 to create
+    ├── packer/{aws,azure,gcp}/            ✅ upstream (no alicloud/)
+    ├── packer/nebius/                     🟡 to create (mirror src/packer/gcp/)
     ├── python/                            ✅ deployer.py / deploy_command.py / utils.py are cloud-agnostic
     ├── python/nebius.py                   🟡 to create (mirror of aws.py)
     ├── terraform/{aws,gcp,azure,alicloud}/ ✅ upstream
     ├── terraform/nebius/                  🟡 to create
-    └── tests/                             ✅ upstream
+    └── tests/                             ✅ upstream (run_all.sh + per-module tests added in v4.0.0)
 ```
 
 ## Target architecture (delta only — full picture in the active plan)
@@ -80,7 +80,7 @@ Anywhere a version is named, it must agree with the canonical table in [`ARCHITE
 
 | Component | Pin |
 |---|---|
-| Upstream IsaacAutomator commit | `685bc29` (2026-05-14; NoMachine install fix) |
+| Upstream IsaacAutomator commit | `221b5d2` (v4.0.0; merged into `nebius` 2026-05-28) |
 | Isaac Sim | `5.0.0` (native install via the workstation role) |
 | NoMachine | `9.5.7_2` (mirror URL per upstream `685bc29`) |
 | Nebius Terraform provider | `nebius/nebius` v`0.6.8` (community-tier, pre-1.0) |
@@ -97,7 +97,7 @@ Host-side (these are the only commands the host ever needs):
 - `./run ./deploy-aws <name>` — provision an AWS workstation (upstream-default behavior).
 - `./run ./deploy-nebius <name>` — 🟡 provision a Nebius workstation (after the active plan lands).
 - `./run ./ssh <name>` / `./run ./start <name>` / `./run ./stop <name>` / `./run ./destroy <name>` / `./run ./repair <name>` — lifecycle. NoMachine is reached from the host NoMachine client using the IP + port in `state/<name>/info.txt`.
-- `./run ./image-aws` / `./run ./image-nebius` (🟡) — bake a custom VM image via Packer.
+- `./run ./image-aws` / `./run ./image-azure` / `./run ./image-gcp` / `./run ./image-nebius` (🟡) — bake a custom VM image via Packer.
 
 Inside the container (when iterating on Terraform/Packer/Ansible during Nebius work):
 

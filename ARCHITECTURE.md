@@ -30,7 +30,7 @@ For the current in-flight plan, see [`docs/exec-plans/active/add-nebius-target.m
 Key invariants:
 
 - **Isaac Sim runs natively** on the VM so the NoMachine session can drive its GUI. Containerizing Isaac would defeat the GUI access the deployer is built around.
-- **NoMachine is the GUI transport** — TCP only. This is what lets the fork run on any cloud that exposes arbitrary TCP ports (sidesteps the UDP-block problem that ruled out Runpod for our sibling project).
+- **NoMachine is the GUI transport** — works over TCP on any cloud (it can fall back from UDP), which is what lets the fork run on clouds that block UDP (sidestepping the problem that ruled out Runpod for our sibling project). Where the cloud allows UDP, upstream opens both UDP and TCP on port 4000 for better video performance (see `src/terraform/gcp/ovkit/security.tf`); Nebius should follow the same pattern.
 - **The host machine only runs the `./run` container.** Cloud APIs, Terraform, Packer, and Ansible all execute inside the container; the host has no provider CLIs installed and no Ansible state.
 - **The AWS path stays a working reference.** Every Nebius change lives in new files (`src/terraform/nebius/`, `src/python/nebius.py`, `deploy-nebius`, `src/packer/nebius/`) plus one `when:` branch in the `nvidia-driver` Ansible role. AWS is the A/B baseline for hour-cost and bring-up time.
 
@@ -40,7 +40,7 @@ This table is the source of truth. Anywhere else (CLAUDE.md, plans, READMEs, com
 
 | Component | Pin | Source / notes |
 |---|---|---|
-| Upstream IsaacAutomator commit | `685bc29e677714a7f0f72131e2d30eb9b9db2ce7` (2026-05-14) | First main commit after the NoMachine install fix landed. The `nebius` branch is rooted here. |
+| Upstream IsaacAutomator commit | `221b5d2` (v4.0.0; merged into `nebius` 2026-05-28) | Brings in `image-azure`/`image-gcp` Packer wrappers, GCP static IP (`c54374c`), cross-cloud "public IP preserved across stop/start" invariant (`26253f4`), NVIDIA driver/library mismatch reboot (`a573529`), AWS env-var credential support (`60e4695`), and the new `src/tests/` suite. |
 | Isaac Sim | `5.0.0` | Installed natively by the `workstation` Ansible role. |
 | NoMachine | `9.5.7_2` | Per upstream `685bc29`; mirror URL set in `src/ansible/roles/remote-desktop/defaults/main.yml`. |
 | Nebius Terraform provider | `nebius/nebius` v`0.6.8` | Community-tier, pre-1.0. Pin exactly in `src/terraform/nebius/main.tf`. Expect breaking changes on upgrade. |
@@ -58,7 +58,7 @@ Every `./run ./deploy-<cloud> <name>` invocation runs the same four-stage pipeli
 1. **`./run` wraps the host in the `isaac_automator` container.** No cloud CLIs are installed on the host. The container has `aws` / `gcloud` / `az` / `aliyun` installed by `Dockerfile`; Nebius work adds `nebius` to that list.
 2. **`deploy-<cloud>` (Python) validates credentials and shells to Terraform.** Each wrapper imports `<cloud>_validate_credentials()` from `src/python/<cloud>.py`, then constructs a `DeployCommand` (`src/python/deploy_command.py`) and a `Deployer` (`src/python/deployer.py`).
 3. **Terraform provisions the VM.** Each `src/terraform/<cloud>/` module produces the same output names (`isaac_workstation_ip`, `cloud`, `ssh_key`) so `Deployer.tf_output()` can read them without knowing the cloud.
-4. **`Deployer` runs Ansible against `src/ansible/inventory.template`.** The template is cloud-agnostic (it uses a `{cloud}` variable). The single playbook `src/ansible/isaac-workstation.yaml` invokes one top-level role, `isaac-workstation`, which pulls in (in order, via `roles/isaac-workstation/meta/main.yml`): `system`, `nvidia-driver`, `remote-desktop`, `isaacsim-source`, `isaaclab-source`, `isaaclab-arena-source`. Only `nvidia-driver` cares about the cloud — and only via existing `when: cloud == "..."` branches (today: `azure`, `aws or alicloud`, `gcp`).
+4. **`Deployer` runs Ansible against `src/ansible/inventory.template`.** The template is cloud-agnostic (it uses a `{cloud}` variable). The single playbook `src/ansible/isaac-workstation.yaml` invokes one top-level role, `isaac-workstation`, which pulls in (in order, via `roles/isaac-workstation/meta/main.yml`): `system`, `nvidia-driver`, `remote-desktop`, `isaacsim-source`, `isaaclab-source`, `isaaclab-arena-source`. Only `nvidia-driver` cares about the cloud — and only via existing `when: cloud == "..."` branches (today: `azure`, `aws or alicloud`, `gcp`). The post-import driver/library mismatch reboot block (`src/ansible/roles/nvidia-driver/tasks/main.yml:33-51`, added in `a573529`) is cloud-agnostic and applies to every provider.
 
 Reuse — do not re-implement:
 
