@@ -45,11 +45,13 @@ RUN apt-get install -qy terraform
 COPY src/packer/azure/isaac-workstation.pkr.hcl /tmp/app/src/packer/azure/
 COPY src/packer/aws/isaac-workstation.pkr.hcl /tmp/app/src/packer/aws/
 COPY src/packer/gcp/isaac-workstation.pkr.hcl /tmp/app/src/packer/gcp/
+COPY src/packer/nebius/isaac-workstation.pkr.hcl /tmp/app/src/packer/nebius/
 RUN if [ "$WITH_PACKER" = "1" ]; then \
     apt-get install -yq packer; \
     (cd /tmp/app/src/packer/azure && packer init isaac-workstation.pkr.hcl) \
     && (cd /tmp/app/src/packer/aws && packer init isaac-workstation.pkr.hcl) \
-    && (cd /tmp/app/src/packer/gcp && packer init isaac-workstation.pkr.hcl); \
+    && (cd /tmp/app/src/packer/gcp && packer init isaac-workstation.pkr.hcl) \
+    && (cd /tmp/app/src/packer/nebius && packer init isaac-workstation.pkr.hcl); \
     else \
     echo "Skipping Packer installation"; \
     fi
@@ -85,6 +87,16 @@ RUN echo "mkdir -p /app/state/.gcp" >> /root/.bashrc
 # @see https://github.com/aliyun/aliyun-cli#installation
 RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/aliyun/aliyun-cli/HEAD/install.sh)"
 RUN aliyun auto-completion
+
+# nebius cli
+# @see https://docs.nebius.com/cli/quickstart
+# Installer writes the binary to ~/.nebius/bin/nebius (image-resident, not state-bound).
+# User credentials (profile.env + private.pem) live in /app/state/.nebius/ which is
+# bind-mounted from the host; src/python/nebius.py reads them from there and exports
+# the NB_* env vars consumed by both the Nebius CLI and the Terraform/Packer providers.
+RUN curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash
+ENV PATH="/root/.nebius/bin:${PATH}"
+RUN echo "mkdir -p /app/state/.nebius" >> /root/.bashrc
 
 # aws cli
 # @see https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html

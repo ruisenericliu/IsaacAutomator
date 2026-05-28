@@ -8,9 +8,9 @@ A fork of [`isaac-sim/IsaacAutomator`](https://github.com/isaac-sim/IsaacAutomat
 
 ## Current state — read before doing anything
 
-**Fork bring-up complete; Nebius implementation is 🟡 (not started).** Upstream AWS / GCP / Azure / Alicloud paths are untouched and track upstream `221b5d2` exactly — no shared source files have been modified. The harness scaffolding (this file, `ARCHITECTURE.md`, `.claude/`, `docs/`) is the only delta on the `nebius` branch so far.
+**Nebius implementation landed 2026-05-28; live-deployment verification is 🟡 (not started).** All Terraform, Packer, Python, and shell scaffolding for the Nebius target exists on the `nebius` branch and passes every static gate (`terraform validate`, `packer validate`, `terraform fmt -check`, `packer fmt -check`, `ast.parse`). No `terraform apply` or `packer build` has yet been run against a real Nebius project, so cloud-init timing, security-rule semantics, NoMachine on `ubuntu24.04-driverless`, the `nebius compute instance get --format json` envelope shape, and the bootstrap-VPC lifecycle are all unverified. The only shared upstream file touched is `src/ansible/roles/nvidia-driver/tasks/main.yml` (added a `cloud == "nebius"` branch on the existing generic-driver task) — AWS / GCP / Azure / Alicloud paths still track upstream `221b5d2` exactly.
 
-The current source of truth for what we're building is **[`docs/exec-plans/active/add-nebius-target.md`](docs/exec-plans/active/add-nebius-target.md)** — read it (especially §Critical files to create or modify) before proposing changes. The Nebius Terraform provider is community-tier (`nebius/nebius` v0.6.8, pre-1.0), and NoMachine install on Nebius's `ubuntu24.04-driverless` image is the highest-risk unverified step.
+The current source of truth is **[`docs/exec-plans/active/verify-nebius-live-deploy.md`](docs/exec-plans/active/verify-nebius-live-deploy.md)** — read it before kicking off any live cloud calls. The completed implementation plan, including the schema-correction trail and the "where everything landed" table, is preserved at [`docs/exec-plans/completed/add-nebius-target.md`](docs/exec-plans/completed/add-nebius-target.md).
 
 ## Operating principles (agent-first harness)
 
@@ -35,23 +35,25 @@ We are intentionally following the OpenAI Codex "harness engineering" model: hum
 ├── docs/
 │   ├── exec-plans/
 │   │   ├── active/
-│   │   │   └── add-nebius-target.md       ← READ THIS FIRST
-│   │   └── completed/                     (empty; retired plans land here)
+│   │   │   └── verify-nebius-live-deploy.md   ← READ THIS FIRST
+│   │   └── completed/
+│   │       └── add-nebius-target.md           (implementation trail + "where everything landed")
 │   └── references/                        (empty; frozen upstream snapshots land here)
 ├── build / run / ssh / start / stop / destroy / repair / import / download / upload / novnc
 ├── deploy-aws / deploy-gcp / deploy-azure / deploy-alicloud   ✅ upstream, untouched
-├── deploy-nebius                          🟡 to create (mirror of deploy-aws)
+├── deploy-nebius                          ✅ landed 2026-05-28 (static gates green; needs live apply)
 ├── image-aws / image-azure / image-gcp    ✅ upstream (Azure + GCP wrappers added in v4.0.0)
-├── image-nebius                           🟡 to create
-├── Dockerfile                             ✅ upstream (Nebius CLI install to add)
+├── image-nebius                           ✅ landed (drives the bootstrap-VPC + packer build flow)
+├── Dockerfile                             ✅ upstream + Nebius CLI install + packer init for src/packer/nebius/
 └── src/
-    ├── ansible/                           ✅ cloud-agnostic except one branch in nvidia-driver
+    ├── ansible/                           ✅ cloud-agnostic except a cloud == "nebius" branch in nvidia-driver
     ├── packer/{aws,azure,gcp}/            ✅ upstream (no alicloud/)
-    ├── packer/nebius/                     🟡 to create (mirror src/packer/gcp/)
+    ├── packer/nebius/                     ✅ landed (nebius-image builder, plugin v0.0.6)
     ├── python/                            ✅ deployer.py / deploy_command.py / utils.py are cloud-agnostic
-    ├── python/nebius.py                   🟡 to create (mirror of aws.py)
+    ├── python/nebius.py                   ✅ landed (status JSON path needs live pinning — see verify plan §G2a)
     ├── terraform/{aws,gcp,azure,alicloud}/ ✅ upstream
-    ├── terraform/nebius/                  🟡 to create
+    ├── terraform/nebius/                  ✅ landed (provider nebius/nebius v0.6.8)
+    ├── terraform/nebius-packer-bootstrap/ ✅ landed (ephemeral VPC for the Packer build VM)
     └── tests/                             ✅ upstream (run_all.sh + per-module tests added in v4.0.0)
 ```
 

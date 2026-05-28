@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+
+# region copyright
+# Copyright 2023-2026 NVIDIA Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# endregion
+
+import os
+import sys
+
+import click
+
+from src.python.config import c as config
+from src.python.debug import debug_break, debug_start  # noqa
+from src.python.deploy_command import DeployCommand
+from src.python.deployer import Deployer
+from src.python.nebius import nebius_validate_credentials
+from src.python.utils import (
+    colorize_error,
+    colorize_info,
+    colorize_prompt,
+    shell_command,
+)
+
+
+class DeployNebiusCommand(DeployCommand):
+    """
+    Defines options specific to "deploy-nebius".
+    """
+
+    # Supported Nebius GPU shapes for Isaac Sim, expressed as the
+    # provider-native "<platform>/<preset>" combination.
+    # @see https://docs.nebius.com/compute/virtual-machines/types
+    NEBIUS_OVKIT_INSTANCE_TYPES = [
+        # L40S (single-tenant L40S — primary target, matches AWS g6e default)
+        "gpu-l40s-a/1gpu-32vcpu-128gb",
+        # H100
+        "gpu-h100-sxm/1gpu-16vcpu-200gb",
+        "gpu-h100-sxm/8gpu-128vcpu-1600gb",
+        # H200
+        "gpu-h200-sxm/1gpu-16vcpu-200gb",
+        "gpu-h200-sxm/8gpu-128vcpu-1600gb",
+    ]
+
+    @staticmethod
+    def ovkit_instance_type_callback(ctx, param, value):
+        if value not in DeployNebiusCommand.NEBIUS_OVKIT_INSTANCE_TYPES:
+            raise click.BadParameter(
+                colorize_error(
+                    f"Invalid instance type: {value}. Choose one of: "
+                    + ", ".join(DeployNebiusCommand.NEBIUS_OVKIT_INSTANCE_TYPES)
+                    + "."
+                )
+            )
+        return value
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # --instance-type (combined <platform>/<preset>)
+        self.params.insert(
+            self.param_index("ingress_cidrs"),
+            click.core.Option(
+                (
+                    "--instance-type",
+                    "--isaac-workstation-instance-type",
+                    "isaac_workstation_instance_type",
+                ),
+                prompt=colorize_prompt(
+                    "* Instance Type (<platform>/<preset>, e.g. gpu-l40s-a/1gpu-32vcpu-128gb)"
+                ),
+                show_default=True,
+                default=config["nebius_default_isaac_workstation_instance_type"],
+                callback=DeployNebiusCommand.ovkit_instance_type_callback,
+                help="Nebius platform/preset combo. Currently supported: "
+                + ", ".join(self.NEBIUS_OVKIT_INSTANCE_TYPES)
+                + ".",
+            ),
+        )
+
+        # --parent-id (Nebius project ID this deployment lives under).
+        # Required — there is no sensible default, and credential discovery
+        # cannot infer it (a service account can have access to many projects).
+        self.params.insert(
+            self.param_index("ingress_cidrs"),
+            click.core.Option(
+                ("--parent-id",),
+                prompt=colorize_prompt(
+                    "* Nebius Project ID (parent_id, e.g. project-e00...)"
+                ),
+                default=lambda: os.environ.get("NB_PARENT_ID", ""),
+                show_default="$NB_PARENT_ID",
+                help="Nebius project ID under which to create resources."
+                " Also picked up from $NB_PARENT_ID.",
+            ),
+        )
+
+        # defaults
+        self.params[self.param_index("from_image")].default = config[
+            "nebius_default_from_image"
+        ]
+
+
+class NebiusDeployer(Deployer):
+    """
+    Deploys to Nebius.
+    """
+
+    def __init__(self, params, config):
+        super().__init__(params, config)
+
+    def _output_deployment_info(self, print_text=True):
+        self.output_deployment_info(extra_text="", print_text=print_text)
+
+    def main(self):
+        self.ask_existing_behavior()
+
+        if self.existing_behavior != "run_ansible":
+            instance_type = self.params["isaac_workstation_instance_type"]
+            if "/" not in instance_type:
+                raise click.BadParameter(
+                    colorize_error(
+                        f"--instance-type '{instance_type}' must be <platform>/<preset>."
+                    )
+                )
+            platform, preset = instance_type.split("/", 1)
+
+            self.create_tfvars(
+                {
+                    "parent_id": self.params["parent_id"],
+                    "platform": platform,
+                    "preset": preset,
+                    "image_family": config["nebius_default_image_family"],
+                }
+            )
+
+            click.echo(colorize_info("* Running Terraform..."))
+            self.initialize_terraform(cwd=f"{config['terraform_dir']}/nebius")
+            self.run_terraform(cwd=f"{config['terraform_dir']}/nebius")
+
+        self.export_ssh_key()
+        self.create_ansible_inventory()
+        self._output_deployment_info(print_text=False)
+        self.run_all_ansible()
+
+        if self.params["upload"]:
+            self.upload_user_data()
+
+        self._output_deployment_info()
+
+
+@click.command(cls=DeployNebiusCommand)
+def main(**params):
+    NebiusDeployer(params, config).main()
+
+
+if __name__ == "__main__":
+    if os.path.exists("/.dockerenv"):
+        debug = "--debug" in sys.argv or os.environ.get("DEBUG", "0") == "1"
+        nebius_validate_credentials(verbose=debug)
+        main()
+    else:
+        shell_command(f"./run '{' '.join(sys.argv)}'", verbose=True)

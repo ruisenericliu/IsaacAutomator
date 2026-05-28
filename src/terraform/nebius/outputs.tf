@@ -1,0 +1,16 @@
+output "ssh_key" {
+  value     = module.common.ssh_key.private_key_pem
+  sensitive = true
+}
+
+output "cloud" {
+  value = "nebius"
+}
+
+output "isaac_workstation_ip" {
+  value = try(var.isaac_workstation_enabled ? module.isaac_workstation[0].public_ip : "NA", "NA")
+}
+
+output "isaac_workstation_vm_id" {
+  value = try(var.isaac_workstation_enabled ? module.isaac_workstation[0].vm_id : "NA", "NA")
+}

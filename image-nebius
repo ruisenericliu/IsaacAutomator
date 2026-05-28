@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+
+# region copyright
+# Copyright 2023-2026 NVIDIA Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# endregion
+
+import os
+import shlex
+import sys
+from datetime import date
+
+import click
+
+from src.python.config import c as config
+from src.python.debug import debug_break, debug_start  # noqa
+from src.python.deploy_command import DeployCommand
+from src.python.nebius import nebius_validate_credentials
+from src.python.utils import (
+    colorize_error,
+    colorize_info,
+    colorize_prompt,
+    shell_command,
+)
+
+
+def _normalize_image_name(name):
+    """Nebius resource names: lowercase, digits, dashes."""
+    return name.lower().replace(".", "-").replace("_", "-")
+
+
+class ImageNebiusCommand(DeployCommand):
+    """
+    Defines options specific to "image-nebius".
+    """
+
+    NEBIUS_OVKIT_INSTANCE_TYPES = [
+        "gpu-l40s-a/1gpu-32vcpu-128gb",
+        "gpu-h100-sxm/1gpu-16vcpu-200gb",
+        "gpu-h100-sxm/8gpu-128vcpu-1600gb",
+        "gpu-h200-sxm/1gpu-16vcpu-200gb",
+        "gpu-h200-sxm/8gpu-128vcpu-1600gb",
+    ]
+
+    @staticmethod
+    def instance_type_callback(ctx, param, value):
+        if value not in ImageNebiusCommand.NEBIUS_OVKIT_INSTANCE_TYPES:
+            raise click.BadParameter(
+                colorize_error(
+                    f"Invalid instance type: {value}. Valid values: "
+                    + ", ".join(ImageNebiusCommand.NEBIUS_OVKIT_INSTANCE_TYPES)
+                )
+            )
+        return value
+
+    def make_context(self, info_name, args, parent=None, **extra):
+        """Allow image name as an unnamed first argument."""
+        args = list(args)
+        if args and not args[0].startswith("-") and "--image-name" not in args:
+            args = ["--image-name", args[0]] + args[1:]
+        return click.core.Command.make_context(
+            self, info_name, args, parent=parent, **extra
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Drop options not applicable to image building.
+        self.params = [
+            p
+            for p in self.params
+            if p.name
+            not in (
+                "in_china",
+                "from_image",
+                "ingress_cidrs",
+                "vnc_password",
+                "upload",
+                "deployment_name",
+            )
+        ]
+
+        # --image-name (rendered into $PREFIX-$VERSION-<image-name>).
+        self.params.insert(
+            0,
+            click.core.Option(
+                ("--image-name",),
+                show_default="<current date>",
+                default=lambda: date.today().strftime("%Y-%m-%d"),
+                help="Image name. Will be prefixed with"
+                " 'isaac-automator-isaacworkstation-' and normalized.",
+                prompt=colorize_prompt(
+                    "* Image name (will be prefixed with"
+                    " 'isaac-automator-isaacworkstation-')"
+                ),
+            ),
+        )
+
+        # Replace --existing semantics for image-build.
+        self.params = [p for p in self.params if p.name != "existing"]
+        self.params.insert(
+            len(self.params),
+            click.core.Option(
+                ("--existing",),
+                type=click.Choice(["overwrite", "fail"]),
+                default="fail",
+                show_default=True,
+                help="What to do if an image with the same name already exists.",
+            ),
+        )
+
+        # --parent-id (Nebius project ID).
+        self.params.insert(
+            len(self.params),
+            click.core.Option(
+                ("--parent-id",),
+                prompt=colorize_prompt(
+                    "* Nebius Project ID (parent_id, e.g. project-e00...)"
+                ),
+                default=lambda: os.environ.get("NB_PARENT_ID", ""),
+                show_default="$NB_PARENT_ID",
+                help="Nebius project ID under which to build the image."
+                " Also picked up from $NB_PARENT_ID.",
+            ),
+        )
+
+        # --instance-type (Packer build VM shape).
+        self.params.insert(
+            len(self.params),
+            click.core.Option(
+                (
+                    "--instance-type",
+                    "--isaac-workstation-instance-type",
+                    "isaac_workstation_instance_type",
+                ),
+                prompt=colorize_prompt(
+                    "* Instance Type for Packer build (<platform>/<preset>)"
+                ),
+                show_default=True,
+                default=config["nebius_default_isaac_workstation_instance_type"],
+                callback=ImageNebiusCommand.instance_type_callback,
+                help="Nebius platform/preset combo for the Packer build VM.",
+            ),
+        )
+
+
+def _tf_apply_bootstrap(parent_id, debug):
+    """
+    Run `terraform apply` on src/terraform/nebius-packer-bootstrap/, return
+    the subnet_id.
+    """
+    bootstrap_dir = f"{config['terraform_dir']}/nebius-packer-bootstrap"
+
+    click.echo(colorize_info("* Provisioning ephemeral VPC/subnet for Packer..."))
+    shell_command(f"terraform -chdir={bootstrap_dir} init -input=false", verbose=debug)
+    shell_command(
+        f"terraform -chdir={bootstrap_dir} apply -input=false -auto-approve "
+        f"-var=parent_id={shlex.quote(parent_id)}",
+        verbose=debug,
+    )
+
+    res = shell_command(
+        f"terraform -chdir={bootstrap_dir} output -raw subnet_id",
+        verbose=False,
+        capture_output=True,
+    )
+    return res.stdout.decode("utf-8").strip()
+
+
+def _tf_destroy_bootstrap(parent_id, debug):
+    bootstrap_dir = f"{config['terraform_dir']}/nebius-packer-bootstrap"
+    click.echo(colorize_info("* Tearing down ephemeral Packer VPC/subnet..."))
+    shell_command(
+        f"terraform -chdir={bootstrap_dir} destroy -input=false -auto-approve "
+        f"-var=parent_id={shlex.quote(parent_id)}",
+        verbose=debug,
+        exit_on_error=False,
+    )
+
+
+def build_nebius_image(params, config):
+    debug = params["debug"]
+    parent_id = params["parent_id"]
+    instance_type = params["isaac_workstation_instance_type"]
+    isaacsim = params["isaacsim"]
+    isaaclab = params["isaaclab"]
+    isaaclab_arena = params["isaaclab_arena"]
+    system_user_password = params["system_user_password"]
+    image_name = params.get("image_name", "")
+
+    version = os.environ.get("VERSION", "")
+    if not version:
+        click.echo(colorize_error("Error: VERSION environment variable is not set."))
+        sys.exit(1)
+
+    if "/" not in instance_type:
+        click.echo(
+            colorize_error(
+                f"Invalid instance type '{instance_type}'. Expected <platform>/<preset>."
+            )
+        )
+        sys.exit(1)
+    platform, preset = instance_type.split("/", 1)
+
+    full_image_name = (
+        _normalize_image_name(f"isaac-automator-isaacworkstation-{image_name}")
+        if image_name
+        else ""
+    )
+
+    # Packer + Terraform provider both read the same NB_* env vars.
+    os.environ["NB_PARENT_ID"] = parent_id
+
+    subnet_id = _tf_apply_bootstrap(parent_id, debug)
+    os.environ["NB_BUILDER_SUBNET_ID"] = subnet_id
+
+    try:
+        packer_dir = f"{config['app_dir']}/src/packer/nebius"
+
+        click.echo(colorize_info("* Initializing Packer..."))
+        shell_command(
+            f"packer init {packer_dir}/isaac-workstation.pkr.hcl",
+            verbose=debug,
+        )
+
+        def _v(name, value):
+            return f"-var={name}={shlex.quote(str(value))}"
+
+        packer_vars = [
+            _v("nebius_parent_id", parent_id),
+            _v("nebius_subnet_id", subnet_id),
+            _v("platform", platform),
+            _v("preset", preset),
+            _v("version", version),
+            _v("system_user_password", system_user_password),
+            _v("isaacsim", isaacsim),
+            _v("isaaclab", isaaclab),
+            _v("isaaclab_arena", isaaclab_arena),
+            "-var=in_china=false",
+        ]
+
+        if image_name:
+            packer_vars.append(_v("image_name", full_image_name))
+
+        packer_cmd = (
+            "packer build "
+            + " ".join(packer_vars)
+            + f" {packer_dir}/isaac-workstation.pkr.hcl"
+        )
+
+        click.echo(colorize_info("* Building Nebius image with Packer..."))
+        if debug:
+            click.echo(colorize_info(f"* Command: {packer_cmd}"))
+        shell_command(packer_cmd, verbose=debug)
+
+        click.echo(colorize_info("* Image build complete!"))
+    finally:
+        _tf_destroy_bootstrap(parent_id, debug)
+
+
+@click.command(cls=ImageNebiusCommand)
+def main(**params):
+    build_nebius_image(params, config)
+
+
+if __name__ == "__main__":
+    if os.path.exists("/.dockerenv"):
+        debug = "--debug" in sys.argv or os.environ.get("DEBUG", "0") == "1"
+        nebius_validate_credentials(verbose=debug)
+        main()
+    else:
+        shell_command(f"./run '{' '.join(sys.argv)}'", verbose=True)

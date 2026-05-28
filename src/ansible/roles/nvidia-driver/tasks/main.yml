@@ -25,7 +25,7 @@
   when: driver_installed.stdout == "0" and cloud == "azure"
 
 - import_tasks: nvidia-driver.generic.yml
-  when: driver_installed.stdout == "0" and (cloud == "aws" or cloud == "alicloud")
+  when: driver_installed.stdout == "0" and (cloud == "aws" or cloud == "alicloud" or cloud == "nebius")
 
 - import_tasks: nvidia-driver.gcp.yml
   when: driver_installed.stdout == "0" and cloud == "gcp"

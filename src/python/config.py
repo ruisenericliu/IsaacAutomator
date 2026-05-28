@@ -50,6 +50,7 @@ c["default_ssh_port"] = 22
 # --from-image
 c["azure_default_from_image"] = False
 c["aws_default_from_image"] = False
+c["nebius_default_from_image"] = False
 
 # --isaac-workstation-instance-type
 c["aws_default_isaac_workstation_instance_type"] = "g6e.2xlarge"
@@ -57,6 +58,9 @@ c["aws_default_isaac_workstation_instance_type"] = "g6e.2xlarge"
 c["azure_default_isaac_workstation_instance_type"] = "Standard_NV36ads_A10_v5"
 c["gcp_default_isaac_workstation_instance_type"] = "g2-standard-8"
 c["alicloud_default_isaac_workstation_instance_type"] = "ecs.gn7i-c16g1.4xlarge"
+# Nebius "platform/preset" — L40S single-GPU closest to AWS g6e.2xlarge.
+c["nebius_default_isaac_workstation_instance_type"] = "gpu-l40s-a/1gpu-32vcpu-128gb"
+c["nebius_default_image_family"] = "ubuntu24.04-driverless"
 
 # --isaac-workstation-gpu-count
 c["gcp_default_isaac_workstation_gpu_count"] = 1
