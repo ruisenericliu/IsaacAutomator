@@ -24,6 +24,14 @@ The "bare-OS deploy" path (§G3) is the load-bearing gate because it forces ever
 
 ### Pre-flight (before any live API call)
 
+> **🔴 BLOCKED at §G0a (2026-05-28) — Nebius tenant pending activation, not an IsaacAutomator issue.**
+> Cannot mint a service-account authorized key, so no `NB_AUTHKEY_PUBLIC_ID` / `private.pem` can be produced and every downstream gate is gated on it. Diagnosis trail (all ruled out):
+> - User `Eric Liu` (`tenantuseraccount-e00tzsbwpv9wygh4t7`) is a member of the `admins` group (`group-e00natmf82rppa2eq5`), which holds the **`admin` role tenant-wide** on `chocolate-bee-tenant-3nu` (`tenant-e00v48eff4bbz4dshf`) — confirmed via the group's Access permits tab.
+> - Full console re-login (fresh token) did **not** help.
+> - Console **Upload authorized key** returns `permission_denied` for **two different** service accounts, including `test_service_account` (`serviceaccount-e00gxgmf87yk15abwx`) which is itself in `admins` and in `default-project-eu-north1`.
+> - Tenant-wide failure by a confirmed tenant-admin ⇒ not RBAC, not SA-specific ⇒ the tenant is in a restricted/unactivated state (6 hrs old at time of failure). Nebius does not publicly document a verification gate on this op.
+> **Next action (Nebius-side, not in-repo):** check Billing/account for an identity/payment-verification banner; open a Nebius support ticket (console headset icon) quoting tenant `tenant-e00v48eff4bbz4dshf` and the "tenant-admin gets permission_denied uploading an authorized key for every SA" symptom. Resume §G0a once activation clears. The on-disk template (`state/.nebius/profile.env` + `private.pem`) is already staged with `NB_SA_ID=serviceaccount-e00pz304fxpgzmz7bx` filled in; swap to `…gxgmf87yk15abwx` if that ends up being the SA whose key succeeds.
+
 - **§G0a.** User drops `state/.nebius/profile.env` (containing `NB_SA_ID=…`, `NB_AUTHKEY_PUBLIC_ID=…`, `NB_PARENT_ID=…`) and `state/.nebius/private.pem` (chmod 600) on the host. Both files are bind-mounted into the container via `./run`. Validate by running `./run ./deploy-nebius --help` — should not crash on credential discovery. (No live API call yet — `nebius_validate_credentials` is gated to run inside `if os.path.exists("/.dockerenv")`.)
 - **§G0b.** Rebuild the container: `./build`. The cached `isaac_automator:latest` is pre-Dockerfile-edit and lacks the Nebius CLI + `packer init` for `src/packer/nebius/`. After rebuild, `./run nebius version` inside the container should print a CLI version.
 - **§G0c.** Confirm credentials authenticate: inside the container, `nebius iam tenant list --format json` returns at least one tenant entry. This is what `nebius_validate_credentials` probes.
